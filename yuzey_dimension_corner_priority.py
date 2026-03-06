@@ -195,25 +195,35 @@ def get_local_cplane(face):
 
 def get_face_bbox_points(face, plane):
     tol = sc.doc.ModelAbsoluteTolerance
-    corners = []
-
     loop = face.OuterLoop
-    if loop:
-        corners = [trim.PointAtStart for trim in loop.Trims if trim]
+    if not loop:
+        return None
 
-    origin = plane.Origin
-    x_axis = plane.XAxis
-    y_axis = plane.YAxis
+    sample_points = []
+    for trim in loop.Trims:
+        edge = trim.Edge if trim else None
+        if not edge:
+            continue
+
+        sample_points.append(edge.PointAtStart)
+        sample_points.append(edge.PointAtEnd)
+
+        ok_mid, mid_t = edge.NormalizedLengthParameter(0.5)
+        if ok_mid:
+            sample_points.append(edge.PointAt(mid_t))
+
+    if not sample_points:
+        return None
 
     min_x = float("inf")
     max_x = float("-inf")
     min_y = float("inf")
     max_y = float("-inf")
 
-    for corner in corners:
-        vec = corner - origin
-        x = Rhino.Geometry.Vector3d.Multiply(vec, x_axis)
-        y = Rhino.Geometry.Vector3d.Multiply(vec, y_axis)
+    for pt in sample_points:
+        ok, x, y = plane.ClosestParameter(pt)
+        if not ok:
+            continue
 
         if x < min_x:
             min_x = x
@@ -224,24 +234,15 @@ def get_face_bbox_points(face, plane):
         if y > max_y:
             max_y = y
 
-    # Köşe bilgisi eksikse (örn. problemli trim/singular durumları),
-    # yüzün düzleme göre bbox'ını fallback olarak kullan.
-    if not corners or min_x == float("inf"):
-        bbox = face.GetBoundingBox(plane)
-        if not bbox.IsValid:
-            return None
-
-        min_x = bbox.Min.X
-        max_x = bbox.Max.X
-        min_y = bbox.Min.Y
-        max_y = bbox.Max.Y
+    if min_x == float("inf") or min_y == float("inf"):
+        return None
 
     if (max_x - min_x) <= tol or (max_y - min_y) <= tol:
         return None
 
-    pt00 = origin + (x_axis * min_x) + (y_axis * min_y)
-    pt10 = origin + (x_axis * max_x) + (y_axis * min_y)
-    pt01 = origin + (x_axis * min_x) + (y_axis * max_y)
+    pt00 = plane.PointAt(min_x, min_y)
+    pt10 = plane.PointAt(max_x, min_y)
+    pt01 = plane.PointAt(min_x, max_y)
 
     return pt00, pt10, pt01
 
