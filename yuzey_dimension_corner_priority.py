@@ -76,18 +76,28 @@ def get_preferred_corner_plane(face, base_plane):
     if len(trims) < 2:
         return None
 
+    corners = [trim.PointAtStart for trim in trims]
+    corner_count = len(corners)
+    if corner_count < 3:
+        return None
+
     candidates = []
 
-    for i, curr_trim in enumerate(trims):
-        prev_trim = trims[i - 1]
-        prev_edge = prev_trim.Edge
-        curr_edge = curr_trim.Edge
-        if not prev_edge or not curr_edge:
+    for i in range(corner_count):
+        prev_corner = corners[i - 1]
+        corner = corners[i]
+        next_corner = corners[(i + 1) % corner_count]
+
+        incoming_raw = prev_corner - corner
+        outgoing_raw = next_corner - corner
+
+        incoming_len = incoming_raw.Length
+        outgoing_len = outgoing_raw.Length
+        if incoming_len <= tol or outgoing_len <= tol:
             continue
 
-        corner = curr_trim.PointAtStart
-        vec_prev = tangent_from_corner(prev_edge, corner, normal, tol)
-        vec_curr = tangent_from_corner(curr_edge, corner, normal, tol)
+        vec_prev = project_and_unitize(incoming_raw, normal)
+        vec_curr = project_and_unitize(outgoing_raw, normal)
         if not vec_prev or not vec_curr:
             continue
 
@@ -97,14 +107,12 @@ def get_preferred_corner_plane(face, base_plane):
 
         angle_deg = math.degrees(angle_rad)
         if 89.0 <= angle_deg <= 91.0:
-            prev_len = prev_edge.GetLength()
-            curr_len = curr_edge.GetLength()
-            if prev_len >= curr_len:
+            if incoming_len >= outgoing_len:
                 x_axis = vec_prev
-                x_len = prev_len
+                x_len = incoming_len
             else:
                 x_axis = vec_curr
-                x_len = curr_len
+                x_len = outgoing_len
 
             candidates.append({
                 "deviation": abs(angle_deg - 90.0),
@@ -116,7 +124,7 @@ def get_preferred_corner_plane(face, base_plane):
     if not candidates:
         return None
 
-    candidates.sort(key=lambda c: (c["deviation"], -c["x_length"]))
+    candidates.sort(key=lambda c: (-c["x_length"], c["deviation"]))
     best = candidates[0]
 
     x_axis = Rhino.Geometry.Vector3d(best["x_axis"])
