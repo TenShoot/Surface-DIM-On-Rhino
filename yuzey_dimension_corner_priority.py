@@ -76,7 +76,11 @@ def get_preferred_corner_plane(face, base_plane):
     if len(trims) < 2:
         return None
 
+    right_angle_min = 88.0
+    right_angle_max = 92.0
+
     candidates = []
+    trim_count = len(trims)
 
     for i, curr_trim in enumerate(trims):
         prev_trim = trims[i - 1]
@@ -86,6 +90,7 @@ def get_preferred_corner_plane(face, base_plane):
             continue
 
         corner = curr_trim.PointAtStart
+
         vec_prev = tangent_from_corner(prev_edge, corner, normal, tol)
         vec_curr = tangent_from_corner(curr_edge, corner, normal, tol)
         if not vec_prev or not vec_curr:
@@ -96,27 +101,34 @@ def get_preferred_corner_plane(face, base_plane):
             continue
 
         angle_deg = math.degrees(angle_rad)
-        if 89.0 <= angle_deg <= 91.0:
-            prev_len = prev_edge.GetLength()
-            curr_len = curr_edge.GetLength()
-            if prev_len >= curr_len:
-                x_axis = vec_prev
-                x_len = prev_len
-            else:
-                x_axis = vec_curr
-                x_len = curr_len
+        if not (right_angle_min <= angle_deg <= right_angle_max):
+            continue
 
-            candidates.append({
-                "deviation": abs(angle_deg - 90.0),
-                "x_length": x_len,
-                "origin": corner,
-                "x_axis": x_axis,
-            })
+        prev_len = prev_edge.GetLength()
+        curr_len = curr_edge.GetLength()
+        if prev_len <= tol or curr_len <= tol:
+            continue
+
+        deviation = abs(angle_deg - 90.0)
+        candidates.append({
+            "deviation": deviation,
+            "x_length": prev_len,
+            "origin": corner,
+            "x_axis": vec_prev,
+            "corner_index": i % trim_count,
+        })
+        candidates.append({
+            "deviation": deviation,
+            "x_length": curr_len,
+            "origin": corner,
+            "x_axis": vec_curr,
+            "corner_index": i % trim_count,
+        })
 
     if not candidates:
         return None
 
-    candidates.sort(key=lambda c: (c["deviation"], -c["x_length"]))
+    candidates.sort(key=lambda c: (-c["x_length"], c["deviation"], c["corner_index"]))
     best = candidates[0]
 
     x_axis = Rhino.Geometry.Vector3d(best["x_axis"])
@@ -132,8 +144,8 @@ def get_preferred_corner_plane(face, base_plane):
 
 def get_longest_edge_plane(face, base_plane):
     tol = sc.doc.ModelAbsoluteTolerance
-    brep = face.Brep
-    if not brep or brep.Edges.Count == 0:
+    loop = face.OuterLoop
+    if not loop:
         return None
 
     normal = Rhino.Geometry.Vector3d(base_plane.ZAxis)
@@ -142,7 +154,11 @@ def get_longest_edge_plane(face, base_plane):
 
     longest_edge = None
     longest_length = -1.0
-    for edge in brep.Edges:
+    for trim in loop.Trims:
+        edge = trim.Edge if trim else None
+        if not edge:
+            continue
+
         edge_len = edge.GetLength()
         if edge_len > longest_length:
             longest_length = edge_len
@@ -166,34 +182,97 @@ def get_longest_edge_plane(face, base_plane):
     return Rhino.Geometry.Plane(origin, x_axis, y_axis)
 
 
-def get_local_cplane(obj_id):
-    brep = rs.coercebrep(obj_id)
-    if not brep or brep.Faces.Count == 0:
-        return None
+def get_local_cplane(face):
+    if not face:
+        return None, False
 
-    face = brep.Faces[0]
     base_plane = get_face_plane(face)
     if not base_plane:
-        return None
+        return None, False
 
     plane = get_preferred_corner_plane(face, base_plane)
     if plane:
+        return plane, True
+
+    return get_longest_edge_plane(face, base_plane), False
+
+
+def align_plane_x_to_longer_bbox(obj_id, plane):
+    extent_pts = get_plane_aligned_extent_points(obj_id, plane)
+    if not extent_pts:
         return plane
 
-    return get_longest_edge_plane(face, base_plane)
+    tol = sc.doc.ModelAbsoluteTolerance
+    pt1_x, pt2_x, pt2_y = extent_pts
+    x_len = pt1_x.DistanceTo(pt2_x)
+    y_len = pt1_x.DistanceTo(pt2_y)
+
+    # X ekseni her zaman daha uzun boyu temsil etsin.
+    if y_len > x_len + tol:
+        x_axis = Rhino.Geometry.Vector3d(plane.YAxis)
+        y_axis = Rhino.Geometry.Vector3d(-plane.XAxis)
+        return Rhino.Geometry.Plane(plane.Origin, x_axis, y_axis)
+
+    return plane
+
+
+def get_plane_aligned_extent_points(obj_id, plane):
+    brep = rs.coercebrep(obj_id)
+    if not brep:
+        return None
+
+    to_world_xy = Rhino.Geometry.Transform.PlaneToPlane(
+        plane,
+        Rhino.Geometry.Plane.WorldXY,
+    )
+    from_world_xy = Rhino.Geometry.Transform.PlaneToPlane(
+        Rhino.Geometry.Plane.WorldXY,
+        plane,
+    )
+
+    sample_pts_xy = []
+    for edge in brep.Edges:
+        start_pt = Rhino.Geometry.Point3d(edge.PointAtStart)
+        end_pt = Rhino.Geometry.Point3d(edge.PointAtEnd)
+        start_pt.Transform(to_world_xy)
+        end_pt.Transform(to_world_xy)
+        sample_pts_xy.append(start_pt)
+        sample_pts_xy.append(end_pt)
+
+        ok_mid, mid_t = edge.NormalizedLengthParameter(0.5)
+        if ok_mid:
+            mid_pt = Rhino.Geometry.Point3d(edge.PointAt(mid_t))
+            mid_pt.Transform(to_world_xy)
+            sample_pts_xy.append(mid_pt)
+
+    if not sample_pts_xy:
+        return None
+
+    min_x = min(pt.X for pt in sample_pts_xy)
+    max_x = max(pt.X for pt in sample_pts_xy)
+    min_y = min(pt.Y for pt in sample_pts_xy)
+    max_y = max(pt.Y for pt in sample_pts_xy)
+
+    pt1_x = Rhino.Geometry.Point3d(min_x, min_y, 0.0)
+    pt2_x = Rhino.Geometry.Point3d(max_x, min_y, 0.0)
+    pt2_y = Rhino.Geometry.Point3d(min_x, max_y, 0.0)
+
+    pt1_x.Transform(from_world_xy)
+    pt2_x.Transform(from_world_xy)
+    pt2_y.Transform(from_world_xy)
+
+    return pt1_x, pt2_x, pt2_y
 
 
 def add_inside_dimensions(obj_id, plane):
-    bbox = rs.BoundingBox(obj_id, plane)
-    if not bbox or len(bbox) != 8:
+    extent_pts = get_plane_aligned_extent_points(obj_id, plane)
+    if not extent_pts:
         return False
 
     tol = sc.doc.ModelAbsoluteTolerance
 
-    pt1_x = bbox[0]
-    pt2_x = bbox[1]
-    pt1_y = bbox[0]
-    pt2_y = bbox[3]
+    pt1_x, pt2_x, pt2_y = extent_pts
+    pt1_y = pt1_x
 
     x_len = pt1_x.DistanceTo(pt2_x)
     y_len = pt1_y.DistanceTo(pt2_y)
@@ -201,8 +280,9 @@ def add_inside_dimensions(obj_id, plane):
     if x_len <= tol or y_len <= tol:
         return False
 
-    x_offset = y_len * 0.25
-    y_offset = x_len * 0.25
+    # Ölçü çizgileri yüzey sınırından, kenar uzunluğunun 1/3'ü kadar içeride olsun.
+    x_offset = y_len / 3.0
+    y_offset = x_len / 3.0
 
     mid_x = midpoint(pt1_x, pt2_x)
     mid_y = midpoint(pt1_y, pt2_y)
@@ -216,37 +296,98 @@ def add_inside_dimensions(obj_id, plane):
     return bool(dim1 or dim2)
 
 
+def create_temp_face_object(face):
+    if not face:
+        return None
+
+    dup_brep = face.DuplicateFace(False)
+    if not dup_brep:
+        return None
+
+    temp_id = sc.doc.Objects.AddBrep(dup_brep)
+    if not temp_id:
+        return None
+
+    return temp_id
+
+
+def ensure_automatic_dim_layer():
+    layer_name = "Automatic DIM"
+    if not rs.IsLayer(layer_name):
+        rs.AddLayer(layer_name)
+    return layer_name
+
+
+def get_selected_faces():
+    go = Rhino.Input.Custom.GetObject()
+    go.SetCommandPrompt("Boyutlandırmak istediğiniz yüzeyleri seçin (polysurface için yüzeye tıklayın)")
+    # Sadece yüz (face) seçimlerini kabul et: polysurface gövdesi toplu seçilmesin.
+    go.GeometryFilter = Rhino.DocObjects.ObjectType.Surface
+    go.SubObjectSelect = True
+    go.EnablePreSelect(False, True)
+    go.GetMultiple(1, 0)
+
+    if go.CommandResult() != Rhino.Commands.Result.Success:
+        return []
+
+    selected = []
+    for i in range(go.ObjectCount):
+        obj_ref = go.Object(i)
+        if not obj_ref:
+            continue
+
+        face = obj_ref.Face()
+        if face:
+            selected.append(face)
+
+    return selected
+
+
 def YuzeyBoyutlandirYerelCPlane():
-    yuzeyler = rs.GetObjects(
-        "Boyutlandırmak istediğiniz yüzeyleri seçin",
-        rs.filter.surface,
-        preselect=True,
-    )
-    if not yuzeyler:
+    secilen_yuzeyler = get_selected_faces()
+    if not secilen_yuzeyler:
         return
 
     view = rs.CurrentView()
     old_cplane = rs.ViewCPlane(view)
+    old_layer = rs.CurrentLayer()
+    dim_layer = ensure_automatic_dim_layer()
     basarili = 0
     atlanan = []
 
     rs.EnableRedraw(False)
     try:
-        for yuzey in yuzeyler:
-            local_plane = get_local_cplane(yuzey)
-            if not local_plane:
-                atlanan.append(str(yuzey))
+        rs.CurrentLayer(dim_layer)
+        for face in secilen_yuzeyler:
+            temp_id = create_temp_face_object(face)
+            if not temp_id:
+                atlanan.append("seçili yüzey")
                 continue
 
-            rs.ViewCPlane(view, local_plane)
+            try:
+                temp_brep = rs.coercebrep(temp_id)
+                temp_face = temp_brep.Faces[0] if temp_brep and temp_brep.Faces.Count else None
+                local_plane, used_right_angle = get_local_cplane(temp_face)
+                if not local_plane:
+                    atlanan.append("seçili yüzey")
+                    continue
 
-            if add_inside_dimensions(yuzey, local_plane):
-                basarili += 1
-            else:
-                atlanan.append(str(yuzey))
+                # 90° köşe ile plane bulunduysa onu bozma; sadece fallback durumda hizala.
+                if not used_right_angle:
+                    local_plane = align_plane_x_to_longer_bbox(temp_id, local_plane)
+
+                rs.ViewCPlane(view, local_plane)
+
+                if add_inside_dimensions(temp_id, local_plane):
+                    basarili += 1
+                else:
+                    atlanan.append("seçili yüzey")
+            finally:
+                rs.DeleteObject(temp_id)
 
     finally:
         rs.ViewCPlane(view, old_cplane)
+        rs.CurrentLayer(old_layer)
         rs.EnableRedraw(True)
 
     if basarili:
