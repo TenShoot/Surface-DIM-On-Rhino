@@ -191,17 +191,17 @@ def get_longest_edge_plane(face, base_plane):
 
 def get_local_cplane(face):
     if not face:
-        return None
+        return None, False
 
     base_plane = get_face_plane(face)
     if not base_plane:
-        return None
+        return None, False
 
     plane = get_preferred_corner_plane(face, base_plane)
     if plane:
-        return plane
+        return plane, True
 
-    return get_longest_edge_plane(face, base_plane)
+    return get_longest_edge_plane(face, base_plane), False
 
 
 def align_plane_x_to_longer_bbox(obj_id, plane):
@@ -357,12 +357,15 @@ def YuzeyBoyutlandirYerelCPlane():
             try:
                 temp_brep = rs.coercebrep(temp_id)
                 temp_face = temp_brep.Faces[0] if temp_brep and temp_brep.Faces.Count else None
-                local_plane = get_local_cplane(temp_face)
+                local_plane, used_right_angle = get_local_cplane(temp_face)
                 if not local_plane:
                     atlanan.append("seçili yüzey")
                     continue
 
-                local_plane = align_plane_x_to_longer_bbox(temp_id, local_plane)
+                # 90° köşe ile plane bulunduysa onu bozma; sadece fallback durumda hizala.
+                if not used_right_angle:
+                    local_plane = align_plane_x_to_longer_bbox(temp_id, local_plane)
+
                 rs.ViewCPlane(view, local_plane)
 
                 if add_inside_dimensions(temp_id, local_plane):
