@@ -13,6 +13,13 @@ def midpoint(pt_a, pt_b):
     )
 
 
+def project_point_to_plane(pt, plane):
+    ok, u, v = plane.ClosestParameter(pt)
+    if not ok:
+        return None
+    return plane.PointAt(u, v)
+
+
 def get_face_plane(face):
     tol = sc.doc.ModelAbsoluteTolerance
     ok, plane = face.TryGetPlane(tol)
@@ -278,6 +285,14 @@ def add_inside_dimensions(obj_id, plane):
     pt1_x, pt2_x, pt2_y = extent_pts
     pt1_y = pt1_x
 
+    # Tüm ölçü noktalarını kesin olarak local plane üzerine oturt.
+    pt1_x = project_point_to_plane(pt1_x, plane)
+    pt2_x = project_point_to_plane(pt2_x, plane)
+    pt1_y = project_point_to_plane(pt1_y, plane)
+    pt2_y = project_point_to_plane(pt2_y, plane)
+    if not pt1_x or not pt2_x or not pt1_y or not pt2_y:
+        return False
+
     x_len = pt1_x.DistanceTo(pt2_x)
     y_len = pt1_y.DistanceTo(pt2_y)
 
@@ -291,8 +306,10 @@ def add_inside_dimensions(obj_id, plane):
     mid_x = midpoint(pt1_x, pt2_x)
     mid_y = midpoint(pt1_y, pt2_y)
 
-    dim_point_x = mid_x + (plane.YAxis * x_offset)
-    dim_point_y = mid_y + (plane.XAxis * y_offset)
+    dim_point_x = project_point_to_plane(mid_x + (plane.YAxis * x_offset), plane)
+    dim_point_y = project_point_to_plane(mid_y + (plane.XAxis * y_offset), plane)
+    if not dim_point_x or not dim_point_y:
+        return False
 
     dim1 = rs.AddAlignedDimension(pt1_x, pt2_x, dim_point_x)
     dim2 = rs.AddAlignedDimension(pt1_y, pt2_y, dim_point_y)
