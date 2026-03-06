@@ -193,69 +193,17 @@ def get_local_cplane(face):
     return get_longest_edge_plane(face, base_plane)
 
 
-def get_face_bbox_points(face, plane):
-    tol = sc.doc.ModelAbsoluteTolerance
-    loop = face.OuterLoop
-    if not loop:
-        return None
-
-    sample_points = []
-    for trim in loop.Trims:
-        edge = trim.Edge if trim else None
-        if not edge:
-            continue
-
-        sample_points.append(edge.PointAtStart)
-        sample_points.append(edge.PointAtEnd)
-
-        ok_mid, mid_t = edge.NormalizedLengthParameter(0.5)
-        if ok_mid:
-            sample_points.append(edge.PointAt(mid_t))
-
-    if not sample_points:
-        return None
-
-    min_x = float("inf")
-    max_x = float("-inf")
-    min_y = float("inf")
-    max_y = float("-inf")
-
-    for pt in sample_points:
-        ok, x, y = plane.ClosestParameter(pt)
-        if not ok:
-            continue
-
-        if x < min_x:
-            min_x = x
-        if x > max_x:
-            max_x = x
-        if y < min_y:
-            min_y = y
-        if y > max_y:
-            max_y = y
-
-    if min_x == float("inf") or min_y == float("inf"):
-        return None
-
-    if (max_x - min_x) <= tol or (max_y - min_y) <= tol:
-        return None
-
-    pt00 = plane.PointAt(min_x, min_y)
-    pt10 = plane.PointAt(max_x, min_y)
-    pt01 = plane.PointAt(min_x, max_y)
-
-    return pt00, pt10, pt01
-
-
-def add_inside_dimensions(face, plane):
-    bbox_pts = get_face_bbox_points(face, plane)
-    if not bbox_pts:
+def add_inside_dimensions(obj_id, plane):
+    bbox = rs.BoundingBox(obj_id, plane)
+    if not bbox or len(bbox) != 8:
         return False
 
     tol = sc.doc.ModelAbsoluteTolerance
 
-    pt1_x, pt2_x, pt2_y = bbox_pts
-    pt1_y = pt1_x
+    pt1_x = bbox[0]
+    pt2_x = bbox[1]
+    pt1_y = bbox[0]
+    pt2_y = bbox[3]
 
     x_len = pt1_x.DistanceTo(pt2_x)
     y_len = pt1_y.DistanceTo(pt2_y)
@@ -277,6 +225,21 @@ def add_inside_dimensions(face, plane):
     dim2 = rs.AddAlignedDimension(pt1_y, pt2_y, dim_point_y)
 
     return bool(dim1 or dim2)
+
+
+def create_temp_face_object(face):
+    if not face:
+        return None
+
+    dup_brep = face.DuplicateFace(False)
+    if not dup_brep:
+        return None
+
+    temp_id = sc.doc.Objects.AddBrep(dup_brep)
+    if not temp_id:
+        return None
+
+    return temp_id
 
 
 def ensure_automatic_dim_layer():
@@ -331,17 +294,27 @@ def YuzeyBoyutlandirYerelCPlane():
     try:
         rs.CurrentLayer(dim_layer)
         for face in secilen_yuzeyler:
-            local_plane = get_local_cplane(face)
-            if not local_plane:
+            temp_id = create_temp_face_object(face)
+            if not temp_id:
                 atlanan.append("seçili yüzey")
                 continue
 
-            rs.ViewCPlane(view, local_plane)
+            try:
+                temp_brep = rs.coercebrep(temp_id)
+                temp_face = temp_brep.Faces[0] if temp_brep and temp_brep.Faces.Count else None
+                local_plane = get_local_cplane(temp_face)
+                if not local_plane:
+                    atlanan.append("seçili yüzey")
+                    continue
 
-            if add_inside_dimensions(face, local_plane):
-                basarili += 1
-            else:
-                atlanan.append("seçili yüzey")
+                rs.ViewCPlane(view, local_plane)
+
+                if add_inside_dimensions(temp_id, local_plane):
+                    basarili += 1
+                else:
+                    atlanan.append("seçili yüzey")
+            finally:
+                rs.DeleteObject(temp_id)
 
     finally:
         rs.ViewCPlane(view, old_cplane)
