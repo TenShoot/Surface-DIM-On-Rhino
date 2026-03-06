@@ -13,13 +13,6 @@ def midpoint(pt_a, pt_b):
     )
 
 
-def project_point_to_plane(pt, plane):
-    ok, u, v = plane.ClosestParameter(pt)
-    if not ok:
-        return None
-    return plane.PointAt(u, v)
-
-
 def get_face_plane(face):
     tol = sc.doc.ModelAbsoluteTolerance
     ok, plane = face.TryGetPlane(tol)
@@ -235,43 +228,46 @@ def get_plane_aligned_extent_points(obj_id, plane):
     if not brep:
         return None
 
-    sample_pts = []
+    to_world_xy = Rhino.Geometry.Transform.PlaneToPlane(
+        plane,
+        Rhino.Geometry.Plane.WorldXY,
+    )
+    from_world_xy = Rhino.Geometry.Transform.PlaneToPlane(
+        Rhino.Geometry.Plane.WorldXY,
+        plane,
+    )
+
+    sample_pts_xy = []
     for edge in brep.Edges:
-        sample_pts.append(edge.PointAtStart)
-        sample_pts.append(edge.PointAtEnd)
+        start_pt = Rhino.Geometry.Point3d(edge.PointAtStart)
+        end_pt = Rhino.Geometry.Point3d(edge.PointAtEnd)
+        start_pt.Transform(to_world_xy)
+        end_pt.Transform(to_world_xy)
+        sample_pts_xy.append(start_pt)
+        sample_pts_xy.append(end_pt)
 
         ok_mid, mid_t = edge.NormalizedLengthParameter(0.5)
         if ok_mid:
-            sample_pts.append(edge.PointAt(mid_t))
+            mid_pt = Rhino.Geometry.Point3d(edge.PointAt(mid_t))
+            mid_pt.Transform(to_world_xy)
+            sample_pts_xy.append(mid_pt)
 
-    if not sample_pts:
+    if not sample_pts_xy:
         return None
 
-    min_u = float("inf")
-    max_u = float("-inf")
-    min_v = float("inf")
-    max_v = float("-inf")
+    min_x = min(pt.X for pt in sample_pts_xy)
+    max_x = max(pt.X for pt in sample_pts_xy)
+    min_y = min(pt.Y for pt in sample_pts_xy)
+    max_y = max(pt.Y for pt in sample_pts_xy)
 
-    for pt in sample_pts:
-        ok, u, v = plane.ClosestParameter(pt)
-        if not ok:
-            continue
+    pt1_x = Rhino.Geometry.Point3d(min_x, min_y, 0.0)
+    pt2_x = Rhino.Geometry.Point3d(max_x, min_y, 0.0)
+    pt2_y = Rhino.Geometry.Point3d(min_x, max_y, 0.0)
 
-        if u < min_u:
-            min_u = u
-        if u > max_u:
-            max_u = u
-        if v < min_v:
-            min_v = v
-        if v > max_v:
-            max_v = v
+    pt1_x.Transform(from_world_xy)
+    pt2_x.Transform(from_world_xy)
+    pt2_y.Transform(from_world_xy)
 
-    if min_u == float("inf") or min_v == float("inf"):
-        return None
-
-    pt1_x = plane.PointAt(min_u, min_v)
-    pt2_x = plane.PointAt(max_u, min_v)
-    pt2_y = plane.PointAt(min_u, max_v)
     return pt1_x, pt2_x, pt2_y
 
 
@@ -284,14 +280,6 @@ def add_inside_dimensions(obj_id, plane):
 
     pt1_x, pt2_x, pt2_y = extent_pts
     pt1_y = pt1_x
-
-    # Tüm ölçü noktalarını kesin olarak local plane üzerine oturt.
-    pt1_x = project_point_to_plane(pt1_x, plane)
-    pt2_x = project_point_to_plane(pt2_x, plane)
-    pt1_y = project_point_to_plane(pt1_y, plane)
-    pt2_y = project_point_to_plane(pt2_y, plane)
-    if not pt1_x or not pt2_x or not pt1_y or not pt2_y:
-        return False
 
     x_len = pt1_x.DistanceTo(pt2_x)
     y_len = pt1_y.DistanceTo(pt2_y)
@@ -306,10 +294,8 @@ def add_inside_dimensions(obj_id, plane):
     mid_x = midpoint(pt1_x, pt2_x)
     mid_y = midpoint(pt1_y, pt2_y)
 
-    dim_point_x = project_point_to_plane(mid_x + (plane.YAxis * x_offset), plane)
-    dim_point_y = project_point_to_plane(mid_y + (plane.XAxis * y_offset), plane)
-    if not dim_point_x or not dim_point_y:
-        return False
+    dim_point_x = mid_x + (plane.YAxis * x_offset)
+    dim_point_y = mid_y + (plane.XAxis * y_offset)
 
     dim1 = rs.AddAlignedDimension(pt1_x, pt2_x, dim_point_x)
     dim2 = rs.AddAlignedDimension(pt1_y, pt2_y, dim_point_y)
