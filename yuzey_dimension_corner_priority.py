@@ -201,8 +201,9 @@ def add_inside_dimensions(obj_id, plane):
     if x_len <= tol or y_len <= tol:
         return False
 
-    x_offset = y_len * 0.25
-    y_offset = x_len * 0.25
+    # Ölçü çizgileri yüzey sınırından, kenar uzunluğunun 1/3'ü kadar içeride olsun.
+    x_offset = y_len / 3.0
+    y_offset = x_len / 3.0
 
     mid_x = midpoint(pt1_x, pt2_x)
     mid_y = midpoint(pt1_y, pt2_y)
@@ -216,6 +217,13 @@ def add_inside_dimensions(obj_id, plane):
     return bool(dim1 or dim2)
 
 
+def ensure_automatic_dim_layer():
+    layer_name = "Automatic DIM"
+    if not rs.IsLayer(layer_name):
+        rs.AddLayer(layer_name)
+    return layer_name
+
+
 def YuzeyBoyutlandirYerelCPlane():
     yuzeyler = rs.GetObjects(
         "Boyutlandırmak istediğiniz yüzeyleri seçin",
@@ -227,11 +235,14 @@ def YuzeyBoyutlandirYerelCPlane():
 
     view = rs.CurrentView()
     old_cplane = rs.ViewCPlane(view)
+    old_layer = rs.CurrentLayer()
+    dim_layer = ensure_automatic_dim_layer()
     basarili = 0
     atlanan = []
 
     rs.EnableRedraw(False)
     try:
+        rs.CurrentLayer(dim_layer)
         for yuzey in yuzeyler:
             local_plane = get_local_cplane(yuzey)
             if not local_plane:
@@ -247,6 +258,7 @@ def YuzeyBoyutlandirYerelCPlane():
 
     finally:
         rs.ViewCPlane(view, old_cplane)
+        rs.CurrentLayer(old_layer)
         rs.EnableRedraw(True)
 
     if basarili:
