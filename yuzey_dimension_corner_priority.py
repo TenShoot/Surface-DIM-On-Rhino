@@ -325,33 +325,11 @@ def ensure_automatic_dim_layer():
     return layer_name
 
 
-def pick_face_from_brep_by_point(brep, pick_point):
-    if not brep or brep.Faces.Count == 0:
-        return None
-
-    if not pick_point:
-        return brep.Faces[0]
-
-    best_face = None
-    best_dist = float("inf")
-    for face in brep.Faces:
-        ok, u, v = face.ClosestPoint(pick_point)
-        if not ok:
-            continue
-
-        test_pt = face.PointAt(u, v)
-        dist = test_pt.DistanceTo(pick_point)
-        if dist < best_dist:
-            best_dist = dist
-            best_face = face
-
-    return best_face
-
-
 def get_selected_faces():
     go = Rhino.Input.Custom.GetObject()
     go.SetCommandPrompt("Boyutlandırmak istediğiniz yüzeyleri seçin (polysurface için yüzeye tıklayın)")
-    go.GeometryFilter = Rhino.DocObjects.ObjectType.Surface | Rhino.DocObjects.ObjectType.PolysrfFilter
+    # Sadece yüz (face) seçimlerini kabul et: polysurface gövdesi toplu seçilmesin.
+    go.GeometryFilter = Rhino.DocObjects.ObjectType.Surface
     go.SubObjectSelect = True
     go.EnablePreSelect(True, True)
     go.GetMultiple(1, 0)
@@ -368,14 +346,6 @@ def get_selected_faces():
         face = obj_ref.Face()
         if face:
             selected.append(face)
-            continue
-
-        brep = obj_ref.Brep()
-        if brep:
-            pick_point = obj_ref.SelectionPoint()
-            picked_face = pick_face_from_brep_by_point(brep, pick_point)
-            if picked_face:
-                selected.append(picked_face)
 
     return selected
 
