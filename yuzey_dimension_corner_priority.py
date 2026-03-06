@@ -205,13 +205,14 @@ def get_local_cplane(face):
 
 
 def align_plane_x_to_longer_bbox(obj_id, plane):
-    bbox = rs.BoundingBox(obj_id, plane)
-    if not bbox or len(bbox) != 8:
+    extent_pts = get_plane_aligned_extent_points(obj_id, plane)
+    if not extent_pts:
         return plane
 
     tol = sc.doc.ModelAbsoluteTolerance
-    x_len = bbox[0].DistanceTo(bbox[1])
-    y_len = bbox[0].DistanceTo(bbox[3])
+    pt1_x, pt2_x, pt2_y = extent_pts
+    x_len = pt1_x.DistanceTo(pt2_x)
+    y_len = pt1_x.DistanceTo(pt2_y)
 
     # X ekseni her zaman daha uzun boyu temsil etsin.
     if y_len > x_len + tol:
@@ -222,17 +223,60 @@ def align_plane_x_to_longer_bbox(obj_id, plane):
     return plane
 
 
+def get_plane_aligned_extent_points(obj_id, plane):
+    brep = rs.coercebrep(obj_id)
+    if not brep:
+        return None
+
+    sample_pts = []
+    for edge in brep.Edges:
+        sample_pts.append(edge.PointAtStart)
+        sample_pts.append(edge.PointAtEnd)
+
+        ok_mid, mid_t = edge.NormalizedLengthParameter(0.5)
+        if ok_mid:
+            sample_pts.append(edge.PointAt(mid_t))
+
+    if not sample_pts:
+        return None
+
+    min_u = float("inf")
+    max_u = float("-inf")
+    min_v = float("inf")
+    max_v = float("-inf")
+
+    for pt in sample_pts:
+        ok, u, v = plane.ClosestParameter(pt)
+        if not ok:
+            continue
+
+        if u < min_u:
+            min_u = u
+        if u > max_u:
+            max_u = u
+        if v < min_v:
+            min_v = v
+        if v > max_v:
+            max_v = v
+
+    if min_u == float("inf") or min_v == float("inf"):
+        return None
+
+    pt1_x = plane.PointAt(min_u, min_v)
+    pt2_x = plane.PointAt(max_u, min_v)
+    pt2_y = plane.PointAt(min_u, max_v)
+    return pt1_x, pt2_x, pt2_y
+
+
 def add_inside_dimensions(obj_id, plane):
-    bbox = rs.BoundingBox(obj_id, plane)
-    if not bbox or len(bbox) != 8:
+    extent_pts = get_plane_aligned_extent_points(obj_id, plane)
+    if not extent_pts:
         return False
 
     tol = sc.doc.ModelAbsoluteTolerance
 
-    pt1_x = bbox[0]
-    pt2_x = bbox[1]
-    pt1_y = bbox[0]
-    pt2_y = bbox[3]
+    pt1_x, pt2_x, pt2_y = extent_pts
+    pt1_y = pt1_x
 
     x_len = pt1_x.DistanceTo(pt2_x)
     y_len = pt1_y.DistanceTo(pt2_y)
