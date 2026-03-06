@@ -140,8 +140,8 @@ def get_preferred_corner_plane(face, base_plane):
 
 def get_longest_edge_plane(face, base_plane):
     tol = sc.doc.ModelAbsoluteTolerance
-    brep = face.Brep
-    if not brep or brep.Edges.Count == 0:
+    loop = face.OuterLoop
+    if not loop:
         return None
 
     normal = Rhino.Geometry.Vector3d(base_plane.ZAxis)
@@ -150,7 +150,11 @@ def get_longest_edge_plane(face, base_plane):
 
     longest_edge = None
     longest_length = -1.0
-    for edge in brep.Edges:
+    for trim in loop.Trims:
+        edge = trim.Edge if trim else None
+        if not edge:
+            continue
+
         edge_len = edge.GetLength()
         if edge_len > longest_length:
             longest_length = edge_len
@@ -190,13 +194,12 @@ def get_local_cplane(face):
 
 
 def get_face_bbox_points(face, plane):
-    loop = face.OuterLoop
-    if not loop:
-        return None
+    tol = sc.doc.ModelAbsoluteTolerance
+    corners = []
 
-    corners = [trim.PointAtStart for trim in loop.Trims if trim]
-    if len(corners) < 3:
-        return None
+    loop = face.OuterLoop
+    if loop:
+        corners = [trim.PointAtStart for trim in loop.Trims if trim]
 
     origin = plane.Origin
     x_axis = plane.XAxis
@@ -220,6 +223,21 @@ def get_face_bbox_points(face, plane):
             min_y = y
         if y > max_y:
             max_y = y
+
+    # Köşe bilgisi eksikse (örn. problemli trim/singular durumları),
+    # yüzün düzleme göre bbox'ını fallback olarak kullan.
+    if not corners or min_x == float("inf"):
+        bbox = face.GetBoundingBox(plane)
+        if not bbox.IsValid:
+            return None
+
+        min_x = bbox.Min.X
+        max_x = bbox.Max.X
+        min_y = bbox.Min.Y
+        max_y = bbox.Max.Y
+
+    if (max_x - min_x) <= tol or (max_y - min_y) <= tol:
+        return None
 
     pt00 = origin + (x_axis * min_x) + (y_axis * min_y)
     pt10 = origin + (x_axis * max_x) + (y_axis * min_y)
