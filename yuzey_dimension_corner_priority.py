@@ -76,36 +76,27 @@ def get_preferred_corner_plane(face, base_plane):
     if len(trims) < 2:
         return None
 
-    # Modeldeki küçük sapmaları daha toleranslı yakalamak için 90° bandını geniş tutuyoruz.
     right_angle_min = 88.0
     right_angle_max = 92.0
 
-    corners = [trim.PointAtStart for trim in trims]
-    corner_count = len(corners)
-    if corner_count < 3:
-        return None
-
     candidates = []
+    trim_count = len(trims)
 
-    for i in range(corner_count):
-        corner = corners[i]
-        prev_corner = corners[i - 1]
-        next_corner = corners[(i + 1) % corner_count]
-
-        incoming_raw = prev_corner - corner
-        outgoing_raw = next_corner - corner
-
-        incoming_len = incoming_raw.Length
-        outgoing_len = outgoing_raw.Length
-        if incoming_len <= tol or outgoing_len <= tol:
+    for i, curr_trim in enumerate(trims):
+        prev_trim = trims[i - 1]
+        prev_edge = prev_trim.Edge
+        curr_edge = curr_trim.Edge
+        if not prev_edge or not curr_edge:
             continue
 
-        vec_in = project_and_unitize(incoming_raw, normal)
-        vec_out = project_and_unitize(outgoing_raw, normal)
-        if not vec_in or not vec_out:
+        corner = curr_trim.PointAtStart
+
+        vec_prev = tangent_from_corner(prev_edge, corner, normal, tol)
+        vec_curr = tangent_from_corner(curr_edge, corner, normal, tol)
+        if not vec_prev or not vec_curr:
             continue
 
-        angle_rad = Rhino.Geometry.Vector3d.VectorAngle(vec_in, vec_out)
+        angle_rad = Rhino.Geometry.Vector3d.VectorAngle(vec_prev, vec_curr)
         if angle_rad < 0:
             continue
 
@@ -113,28 +104,30 @@ def get_preferred_corner_plane(face, base_plane):
         if not (right_angle_min <= angle_deg <= right_angle_max):
             continue
 
-        deviation = abs(angle_deg - 90.0)
+        prev_len = prev_edge.GetLength()
+        curr_len = curr_edge.GetLength()
+        if prev_len <= tol or curr_len <= tol:
+            continue
 
-        # Öncelik: 90° köşelere bağlı kenarlar arasındaki en uzun kenar X ekseni olsun.
+        deviation = abs(angle_deg - 90.0)
         candidates.append({
             "deviation": deviation,
-            "x_length": incoming_len,
+            "x_length": prev_len,
             "origin": corner,
-            "x_axis": vec_in,
-            "corner_index": i,
+            "x_axis": vec_prev,
+            "corner_index": i % trim_count,
         })
         candidates.append({
             "deviation": deviation,
-            "x_length": outgoing_len,
+            "x_length": curr_len,
             "origin": corner,
-            "x_axis": vec_out,
-            "corner_index": i,
+            "x_axis": vec_curr,
+            "corner_index": i % trim_count,
         })
 
     if not candidates:
         return None
 
-    # 90° köşelerde global en uzun kenarı seç; eşitlikte 90°ye daha yakın ve düşük indeksli köşe.
     candidates.sort(key=lambda c: (-c["x_length"], c["deviation"], c["corner_index"]))
     best = candidates[0]
 
@@ -331,7 +324,7 @@ def get_selected_faces():
     # Sadece yüz (face) seçimlerini kabul et: polysurface gövdesi toplu seçilmesin.
     go.GeometryFilter = Rhino.DocObjects.ObjectType.Surface
     go.SubObjectSelect = True
-    go.EnablePreSelect(True, True)
+    go.EnablePreSelect(False, True)
     go.GetMultiple(1, 0)
 
     if go.CommandResult() != Rhino.Commands.Result.Success:
