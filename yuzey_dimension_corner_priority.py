@@ -204,6 +204,24 @@ def get_local_cplane(face):
     return get_longest_edge_plane(face, base_plane)
 
 
+def align_plane_x_to_longer_bbox(obj_id, plane):
+    bbox = rs.BoundingBox(obj_id, plane)
+    if not bbox or len(bbox) != 8:
+        return plane
+
+    tol = sc.doc.ModelAbsoluteTolerance
+    x_len = bbox[0].DistanceTo(bbox[1])
+    y_len = bbox[0].DistanceTo(bbox[3])
+
+    # X ekseni her zaman daha uzun boyu temsil etsin.
+    if y_len > x_len + tol:
+        x_axis = Rhino.Geometry.Vector3d(plane.YAxis)
+        y_axis = Rhino.Geometry.Vector3d(-plane.XAxis)
+        return Rhino.Geometry.Plane(plane.Origin, x_axis, y_axis)
+
+    return plane
+
+
 def add_inside_dimensions(obj_id, plane):
     bbox = rs.BoundingBox(obj_id, plane)
     if not bbox or len(bbox) != 8:
@@ -344,6 +362,7 @@ def YuzeyBoyutlandirYerelCPlane():
                     atlanan.append("seçili yüzey")
                     continue
 
+                local_plane = align_plane_x_to_longer_bbox(temp_id, local_plane)
                 rs.ViewCPlane(view, local_plane)
 
                 if add_inside_dimensions(temp_id, local_plane):
