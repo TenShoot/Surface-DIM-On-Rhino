@@ -174,12 +174,10 @@ def get_longest_edge_plane(face, base_plane):
     return Rhino.Geometry.Plane(origin, x_axis, y_axis)
 
 
-def get_local_cplane(obj_id):
-    brep = rs.coercebrep(obj_id)
-    if not brep or brep.Faces.Count == 0:
+def get_local_cplane(face):
+    if not face:
         return None
 
-    face = brep.Faces[0]
     base_plane = get_face_plane(face)
     if not base_plane:
         return None
@@ -191,17 +189,54 @@ def get_local_cplane(obj_id):
     return get_longest_edge_plane(face, base_plane)
 
 
-def add_inside_dimensions(obj_id, plane):
-    bbox = rs.BoundingBox(obj_id, plane)
-    if not bbox or len(bbox) != 8:
+def get_face_bbox_points(face, plane):
+    loop = face.OuterLoop
+    if not loop:
+        return None
+
+    corners = [trim.PointAtStart for trim in loop.Trims if trim]
+    if len(corners) < 3:
+        return None
+
+    origin = plane.Origin
+    x_axis = plane.XAxis
+    y_axis = plane.YAxis
+
+    min_x = float("inf")
+    max_x = float("-inf")
+    min_y = float("inf")
+    max_y = float("-inf")
+
+    for corner in corners:
+        vec = corner - origin
+        x = Rhino.Geometry.Vector3d.Multiply(vec, x_axis)
+        y = Rhino.Geometry.Vector3d.Multiply(vec, y_axis)
+
+        if x < min_x:
+            min_x = x
+        if x > max_x:
+            max_x = x
+        if y < min_y:
+            min_y = y
+        if y > max_y:
+            max_y = y
+
+    pt00 = origin + (x_axis * min_x) + (y_axis * min_y)
+    pt10 = origin + (x_axis * max_x) + (y_axis * min_y)
+    pt01 = origin + (x_axis * min_x) + (y_axis * max_y)
+
+    return pt00, pt10, pt01
+
+
+def add_inside_dimensions(face, plane):
+    bbox_pts = get_face_bbox_points(face, plane)
+    if not bbox_pts:
         return False
 
     tol = sc.doc.ModelAbsoluteTolerance
 
-    pt1_x = bbox[0]
-    pt2_x = bbox[1]
-    pt1_y = bbox[0]
-    pt2_y = bbox[3]
+    pt1_x, pt2_x, pt2_y = bbox_pts
+    pt1_y = pt1_x
 
     x_len = pt1_x.DistanceTo(pt2_x)
     y_len = pt1_y.DistanceTo(pt2_y)
@@ -232,13 +267,38 @@ def ensure_automatic_dim_layer():
     return layer_name
 
 
+def get_selected_faces():
+    go = Rhino.Input.Custom.GetObject()
+    go.SetCommandPrompt("Boyutlandırmak istediğiniz yüzeyleri seçin (polysurface için yüzeye tıklayın)")
+    go.GeometryFilter = Rhino.DocObjects.ObjectType.Surface | Rhino.DocObjects.ObjectType.PolysrfFilter
+    go.SubObjectSelect = True
+    go.EnablePreSelect(True, True)
+    go.GetMultiple(1, 0)
+
+    if go.CommandResult() != Rhino.Commands.Result.Success:
+        return []
+
+    selected = []
+    for i in range(go.ObjectCount):
+        obj_ref = go.Object(i)
+        if not obj_ref:
+            continue
+
+        face = obj_ref.Face()
+        if face:
+            selected.append(face)
+            continue
+
+        brep = obj_ref.Brep()
+        if brep and brep.Faces.Count == 1:
+            selected.append(brep.Faces[0])
+
+    return selected
+
+
 def YuzeyBoyutlandirYerelCPlane():
-    yuzeyler = rs.GetObjects(
-        "Boyutlandırmak istediğiniz yüzeyleri seçin",
-        rs.filter.surface,
-        preselect=True,
-    )
-    if not yuzeyler:
+    secilen_yuzeyler = get_selected_faces()
+    if not secilen_yuzeyler:
         return
 
     view = rs.CurrentView()
@@ -251,18 +311,18 @@ def YuzeyBoyutlandirYerelCPlane():
     rs.EnableRedraw(False)
     try:
         rs.CurrentLayer(dim_layer)
-        for yuzey in yuzeyler:
-            local_plane = get_local_cplane(yuzey)
+        for face in secilen_yuzeyler:
+            local_plane = get_local_cplane(face)
             if not local_plane:
-                atlanan.append(str(yuzey))
+                atlanan.append("seçili yüzey")
                 continue
 
             rs.ViewCPlane(view, local_plane)
 
-            if add_inside_dimensions(yuzey, local_plane):
+            if add_inside_dimensions(face, local_plane):
                 basarili += 1
             else:
-                atlanan.append(str(yuzey))
+                atlanan.append("seçili yüzey")
 
     finally:
         rs.ViewCPlane(view, old_cplane)
